@@ -39,171 +39,176 @@ export const initSocket = (server: any) => {
 
   const chatService = new ChatService();
 
-  /**
-   * Map to track user information in rooms
-   * Key: roomId, Value: Map of socketId -> username
-   * @type {Map<string, Map<string, string>>}
-   */
-  const userRooms = new Map<string, Map<string, string>>();
+  // Mapa para trackear usuarios en salas
+  const userRooms = new Map<string, Set<string>>();
+
+
+
+
 
   io.on("connection", (socket: Socket) => {
-    console.log(`✅ User connected: ${socket.id}`);
+    console.log(`✅ Usuario conectado: ${socket.id}`);
 
     /**
-     * Join room event handler
-     * Allows a user to join a specific chat room with their username
-     * @event joinRoom
-     * @param {Object} data - Join room data
-     * @param {string} data.roomId - Unique identifier of the room to join
-     * @param {string} data.userId - Username/identifier of the user joining
-     * @emits userJoined - Notifies other users about the new participant
-     * @emits joinedRoom - Confirms successful room join
+     * Unirse a una sala
+
+
+
+
+
+
+
      */
-    socket.on("joinRoom", async (data: { roomId: string; userId: string }) => {
+    socket.on("joinRoom", async (roomId: string) => {
       try {
-        const { roomId, userId } = data;
-        
+
+
         validateRoomId(roomId);
-        
-        if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
-          throw new ValidationError("Valid userId is required");
-        }
 
-        // Add socket to the Socket.IO room
+
+
+
+
+
         socket.join(roomId);
-        
-        // Track user with their username
-        if (!userRooms.has(roomId)) {
-          userRooms.set(roomId, new Map());
-        }
-        userRooms.get(roomId)?.set(socket.id, userId);
 
-        console.log(`👥 User ${userId} (${socket.id}) joined room ${roomId}`);
-        
-        // Notify other users in the room
+        // Trackear usuario en sala
+        if (!userRooms.has(roomId)) {
+          userRooms.set(roomId, new Set());
+        }
+        userRooms.get(roomId)?.add(socket.id);
+
+        console.log(`👥 Usuario ${socket.id} entró a sala ${roomId}`);
+
+        // Notificar a otros usuarios en la sala
         socket.to(roomId).emit("userJoined", {
-          userId: userId,
-          socketId: socket.id,
+          userId: socket.id,
+
           roomId,
           timestamp: new Date(),
           activeUsers: userRooms.get(roomId)?.size || 0
         });
 
-        // Send confirmation to the user
+        // Enviar confirmación al usuario
         socket.emit("joinedRoom", {
           roomId,
-          userId,
+
           activeUsers: userRooms.get(roomId)?.size || 0,
-          message: "Successfully joined the room"
+          message: "Te has unido a la sala exitosamente"
         });
 
       } catch (error) {
-        console.error("❌ Error joining room:", error);
+        console.error("❌ Error al unirse a sala:", error);
         const errorMessage: SocketError = {
           error: error instanceof ValidationError 
             ? error.message 
-            : "Could not join room"
+            : "No se pudo unir a la sala"
         };
         socket.emit("roomError", errorMessage);
       }
     });
 
     /**
-     * Leave room event handler
-     * Removes a user from a chat room
-     * @event leaveRoom
-     * @param {string} roomId - Room ID to leave
+     * Salir de una sala
+
+
+
      */
     socket.on("leaveRoom", (roomId: string) => {
       try {
         validateRoomId(roomId);
-        
-        const userId = userRooms.get(roomId)?.get(socket.id);
-        
+
         socket.leave(roomId);
+
+        // Remover usuario del tracking
         userRooms.get(roomId)?.delete(socket.id);
-        
+
         if (userRooms.get(roomId)?.size === 0) {
           userRooms.delete(roomId);
         }
 
-        console.log(`👋 User ${userId} (${socket.id}) left room ${roomId}`);
-        
+        console.log(`👋 Usuario ${socket.id} salió de sala ${roomId}`);
+
+        // Notificar a otros usuarios
         socket.to(roomId).emit("userLeft", {
-          userId: userId || socket.id,
+          userId: socket.id,
           roomId,
           timestamp: new Date(),
           activeUsers: userRooms.get(roomId)?.size || 0
         });
 
       } catch (error) {
-        console.error("❌ Error leaving room:", error);
+        console.error("❌ Error al salir de sala:", error);
       }
     });
 
     /**
-     * Send message event handler
-     * Processes and broadcasts a new chat message to all users in the room
-     * @event sendMessage
-     * @param {SendMessageData} data - Message data object
+     * Enviar mensaje
+
+
+
      */
     socket.on("sendMessage", async (data: SendMessageData) => {
       try {
+        // Validar datos
         validateMessage(data);
-        
+
         const { roomId, sender, message } = data;
 
+        // Verificar que el usuario esté en la sala
         const rooms = Array.from(socket.rooms);
         if (!rooms.includes(roomId)) {
-          throw new ValidationError("You are not in this room");
+          throw new ValidationError("No estás en esta sala");
         }
 
+        // Guardar mensaje en Firestore
         const saved = await chatService.saveMessage(roomId, sender, message);
 
-        console.log(`💬 Message sent in room ${roomId} by ${sender}`);
+        console.log(`💬 Mensaje enviado en sala ${roomId} por ${sender}`);
 
+        // Emitir mensaje a todos en la sala
         io.to(roomId).emit("receiveMessage", saved);
 
       } catch (error) {
-        console.error("❌ Error sending message:", error);
-        
+        console.error("❌ Error enviando mensaje:", error);
+
         const errorMessage: SocketError = {
           error: error instanceof ValidationError 
             ? error.message 
-            : "Could not send message",
+            : "No se pudo enviar el mensaje",
           details: error instanceof Error ? error.message : undefined
         };
-        
+
         socket.emit("messageError", errorMessage);
       }
     });
 
     /**
-     * Typing indicator event handler
-     * @event typing
+     * Usuario está escribiendo
+
      */
     socket.on("typing", (data: { roomId: string; sender: string; isTyping: boolean }) => {
       try {
         validateRoomId(data.roomId);
-        
+
         socket.to(data.roomId).emit("userTyping", {
           sender: data.sender,
           isTyping: data.isTyping,
           timestamp: new Date()
         });
       } catch (error) {
-        console.error("❌ Error in typing event:", error);
+        console.error("❌ Error en evento typing:", error);
       }
     });
 
     /**
-     * Get active users event handler
-     * @event getActiveUsers
+     * Obtener usuarios activos en una sala
+
      */
     socket.on("getActiveUsers", (roomId: string) => {
       try {
         validateRoomId(roomId);
-        
+
         const activeCount = userRooms.get(roomId)?.size || 0;
         socket.emit("activeUsers", {
           roomId,
@@ -211,29 +216,32 @@ export const initSocket = (server: any) => {
           timestamp: new Date()
         });
       } catch (error) {
-        console.error("❌ Error getting active users:", error);
+        console.error("❌ Error obteniendo usuarios activos:", error);
       }
     });
 
     /**
-     * Disconnect event handler
-     * Cleans up user presence when disconnecting
+     * Desconexión
+
      */
     socket.on("disconnect", (reason: string) => {
-      console.log(`🔌 User disconnected: ${socket.id} - Reason: ${reason}`);
-      
+      console.log(`🔌 Usuario desconectado: ${socket.id} - Razón: ${reason}`);
+
+      // Limpiar usuario de todas las salas
       userRooms.forEach((users, roomId) => {
-        const userId = users.get(socket.id);
-        if (userId) {
+        if (users.has(socket.id)) {
+
           users.delete(socket.id);
-          
+
+          // Notificar a la sala
           socket.to(roomId).emit("userLeft", {
-            userId: userId,
+            userId: socket.id,
             roomId,
             timestamp: new Date(),
             activeUsers: users.size
           });
 
+          // Eliminar sala si está vacía
           if (users.size === 0) {
             userRooms.delete(roomId);
           }
@@ -242,13 +250,13 @@ export const initSocket = (server: any) => {
     });
 
     /**
-     * General error event handler
-     * @event error
+     * Manejo de errores generales
+
      */
     socket.on("error", (error: Error) => {
-      console.error(`❌ Error on socket ${socket.id}:`, error);
+      console.error(`❌ Error en socket ${socket.id}:`, error);
       socket.emit("socketError", {
-        error: "Connection error",
+        error: "Error en la conexión",
         details: error.message
       });
     });
@@ -256,13 +264,15 @@ export const initSocket = (server: any) => {
 
   /**
    * Server-level connection error handler
+   * Logs connection errors at the engine level
    * @event connection_error
+   * @param {Error} err - Connection error
    */
   io.engine.on("connection_error", (err: any) => {
-    console.error("❌ Server connection error:", err);
+    console.error("❌ Error de conexión del servidor:", err);
   });
 
-  console.log("🚀 Socket.IO initialized successfully");
+  console.log("🚀 Socket.IO inicializado correctamente");
 
   return io;
 };
