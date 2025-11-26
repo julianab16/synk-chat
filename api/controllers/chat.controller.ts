@@ -5,20 +5,26 @@ import { validateRoomId, ValidationError } from "../utils/validation";
 const service = new ChatService();
 
 /**
- * Obtiene el historial de mensajes de una sala
+ * Retrieves the message history for a chat room
+ * @route GET /api/chat/:roomId/history
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @returns {Promise<void>} JSON response with message history
+ * @throws {ValidationError} If roomId is invalid
+ * @throws {Error} If there's a server error fetching messages
  */
 export const getHistory = async (req: Request, res: Response) => {
   try {
     const roomId = req.params.roomId;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
 
-    // Validar roomId
+    // Validate room ID format
     validateRoomId(roomId);
 
-    // Validar limit si existe
+    // Validate limit parameter if provided
     if (limit && (isNaN(limit) || limit < 1 || limit > 1000)) {
       return res.status(400).json({ 
-        error: "El parámetro 'limit' debe ser un número entre 1 y 1000" 
+        error: "The 'limit' parameter must be a number between 1 and 1000" 
       });
     }
 
@@ -32,7 +38,7 @@ export const getHistory = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error("Error cargando historial:", error);
+    console.error("Error loading history:", error);
     
     if (error instanceof ValidationError) {
       return res.status(400).json({ 
@@ -43,13 +49,19 @@ export const getHistory = async (req: Request, res: Response) => {
 
     res.status(500).json({ 
       success: false,
-      error: "Error cargando historial" 
+      error: "Error loading history" 
     });
   }
 };
 
 /**
- * Obtiene los mensajes recientes de una sala
+ * Retrieves recent messages from a chat room
+ * @route GET /api/chat/:roomId/recent
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @returns {Promise<void>} JSON response with recent messages (default: 50)
+ * @throws {ValidationError} If roomId is invalid
+ * @throws {Error} If there's a server error fetching messages
  */
 export const getRecentMessages = async (req: Request, res: Response) => {
   try {
@@ -58,9 +70,10 @@ export const getRecentMessages = async (req: Request, res: Response) => {
 
     validateRoomId(roomId);
 
+    // Validate limit is within acceptable range
     if (isNaN(limit) || limit < 1 || limit > 100) {
       return res.status(400).json({ 
-        error: "El parámetro 'limit' debe ser un número entre 1 y 100" 
+        error: "The 'limit' parameter must be a number between 1 and 100" 
       });
     }
 
@@ -74,7 +87,7 @@ export const getRecentMessages = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error("Error obteniendo mensajes recientes:", error);
+    console.error("Error retrieving recent messages:", error);
     
     if (error instanceof ValidationError) {
       return res.status(400).json({ 
@@ -85,13 +98,19 @@ export const getRecentMessages = async (req: Request, res: Response) => {
 
     res.status(500).json({ 
       success: false,
-      error: "Error obteniendo mensajes recientes" 
+      error: "Error retrieving recent messages" 
     });
   }
 };
 
 /**
- * Verifica si una sala existe
+ * Checks if a chat room exists
+ * @route GET /api/chat/:roomId/check
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @returns {Promise<void>} JSON response indicating if the room exists
+ * @throws {ValidationError} If roomId is invalid
+ * @throws {Error} If there's a server error checking room existence
  */
 export const checkRoom = async (req: Request, res: Response) => {
   try {
@@ -108,7 +127,7 @@ export const checkRoom = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error("Error verificando sala:", error);
+    console.error("Error checking room:", error);
     
     if (error instanceof ValidationError) {
       return res.status(400).json({ 
@@ -119,24 +138,32 @@ export const checkRoom = async (req: Request, res: Response) => {
 
     res.status(500).json({ 
       success: false,
-      error: "Error verificando sala" 
+      error: "Error checking room" 
     });
   }
 };
 
 /**
- * Elimina mensajes antiguos de una sala
+ * Deletes old messages from a chat room
+ * @route DELETE /api/chat/:roomId/clean
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @returns {Promise<void>} JSON response with the count of deleted messages
+ * @throws {ValidationError} If roomId is invalid or daysOld is not a positive number
+ * @throws {Error} If there's a server error deleting messages
+ * @description Requires authentication in production environments
  */
 export const cleanOldMessages = async (req: Request, res: Response) => {
   try {
     const roomId = req.params.roomId;
-    const daysOld = req.body.daysOld || 30;
+    const daysOld = req.body.daysOld || 30; // Default: 30 days
 
     validateRoomId(roomId);
 
+    // Validate daysOld is a positive number
     if (isNaN(daysOld) || daysOld < 1) {
       return res.status(400).json({ 
-        error: "daysOld debe ser un número mayor a 0" 
+        error: "daysOld must be a number greater than 0" 
       });
     }
 
@@ -146,11 +173,11 @@ export const cleanOldMessages = async (req: Request, res: Response) => {
       success: true,
       roomId,
       deletedCount,
-      message: `Se eliminaron ${deletedCount} mensajes`
+      message: `${deletedCount} messages deleted`
     });
 
   } catch (error) {
-    console.error("Error limpiando mensajes:", error);
+    console.error("Error cleaning messages:", error);
     
     if (error instanceof ValidationError) {
       return res.status(400).json({ 
@@ -161,7 +188,7 @@ export const cleanOldMessages = async (req: Request, res: Response) => {
 
     res.status(500).json({ 
       success: false,
-      error: "Error limpiando mensajes" 
+      error: "Error cleaning messages" 
     });
   }
 };

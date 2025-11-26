@@ -2,12 +2,43 @@ import { db } from "../firebase";
 import { Message, MessageResponse } from "../types/index";
 import { sanitizeMessage } from "../utils/validation";
 
+/**
+ * ChatService class
+ * Handles all chat-related operations including message storage, retrieval, and management
+ * Uses Firestore as the underlying database for persistent message storage
+ * @class ChatService
+ */
 export class ChatService {
+  /**
+   * Name of the Firestore collection storing chat rooms
+   * @private
+   * @readonly
+   */
   private readonly messagesCollection = "rooms";
+
+  /**
+   * Maximum number of messages that can be retrieved in a single query
+   * Used to prevent excessive data loads and maintain performance
+   * @private
+   * @readonly
+   */
   private readonly maxMessagesPerQuery = 100;
 
   /**
-   * Guarda un mensaje en Firestore
+   * Saves a new message to Firestore
+   * Sanitizes the message content before storage and automatically adds a timestamp
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @param {string} sender - Username or identifier of the message sender
+   * @param {string} message - Content of the message to be saved
+   * @returns {Promise<MessageResponse>} The saved message object including generated ID
+   * @throws {Error} If the message cannot be saved to Firestore
+   * @example
+   * const savedMessage = await chatService.saveMessage(
+   *   "room123", 
+   *   "john_doe", 
+   *   "Hello, world!"
+   * );
    */
   async saveMessage(
     roomId: string, 
@@ -15,6 +46,7 @@ export class ChatService {
     message: string
   ): Promise<MessageResponse> {
     try {
+      // Sanitize message to prevent XSS and injection attacks
       const sanitizedMessage = sanitizeMessage(message);
       
       const msg: Message = {
@@ -24,6 +56,7 @@ export class ChatService {
         timestamp: new Date()
       };
 
+      // Add message to Firestore subcollection
       const docRef = await db
         .collection(this.messagesCollection)
         .doc(roomId)
@@ -35,13 +68,25 @@ export class ChatService {
         id: docRef.id
       };
     } catch (error) {
-      console.error("Error guardando mensaje en Firestore:", error);
-      throw new Error("No se pudo guardar el mensaje");
+      console.error("Error saving message to Firestore:", error);
+      throw new Error("Unable to save message");
     }
   }
 
   /**
-   * Obtiene el historial de mensajes de una sala
+   * Retrieves the message history for a specific chat room
+   * Messages are returned in ascending chronological order (oldest first)
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @param {number} [limit] - Maximum number of messages to retrieve (defaults to maxMessagesPerQuery)
+   * @returns {Promise<MessageResponse[]>} Array of message objects sorted by timestamp
+   * @throws {Error} If the message history cannot be retrieved
+   * @example
+   * // Get last 50 messages
+   * const history = await chatService.getHistory("room123", 50);
+   * 
+   * // Get default limit (100 messages)
+   * const fullHistory = await chatService.getHistory("room123");
    */
   async getHistory(roomId: string, limit?: number): Promise<MessageResponse[]> {
     try {
@@ -55,6 +100,7 @@ export class ChatService {
         .limit(queryLimit)
         .get();
 
+      // Return empty array if no messages found
       if (snap.empty) {
         return [];
       }
@@ -64,13 +110,25 @@ export class ChatService {
         ...doc.data()
       } as MessageResponse));
     } catch (error) {
-      console.error("Error obteniendo historial:", error);
-      throw new Error("No se pudo obtener el historial");
+      console.error("Error retrieving message history:", error);
+      throw new Error("Unable to retrieve message history");
     }
   }
 
   /**
-   * Obtiene los últimos N mensajes de una sala
+   * Retrieves the most recent messages from a chat room
+   * Optimized for real-time display, returns messages in chronological order (oldest to newest)
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @param {number} [limit=50] - Maximum number of recent messages to retrieve (default: 50)
+   * @returns {Promise<MessageResponse[]>} Array of recent messages sorted chronologically
+   * @throws {Error} If the recent messages cannot be retrieved
+   * @example
+   * // Get last 20 messages
+   * const recentMessages = await chatService.getRecentMessages("room123", 20);
+   * 
+   * // Get default 50 messages
+   * const messages = await chatService.getRecentMessages("room123");
    */
   async getRecentMessages(roomId: string, limit: number = 50): Promise<MessageResponse[]> {
     try {
@@ -86,7 +144,7 @@ export class ChatService {
         return [];
       }
 
-      // Invertir el orden para que los más recientes estén al final
+      // Reverse order so newest messages are at the end (chronological order)
       return snap.docs
         .map(doc => ({
           id: doc.id,
@@ -94,19 +152,34 @@ export class ChatService {
         } as MessageResponse))
         .reverse();
     } catch (error) {
-      console.error("Error obteniendo mensajes recientes:", error);
-      throw new Error("No se pudieron obtener los mensajes recientes");
+      console.error("Error retrieving recent messages:", error);
+      throw new Error("Unable to retrieve recent messages");
     }
   }
 
   /**
-   * Elimina mensajes antiguos de una sala (limpieza)
+   * Deletes old messages from a chat room for database maintenance
+   * Uses batch operations for efficient deletion of multiple documents
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @param {number} [daysOld=30] - Age threshold in days; messages older than this will be deleted (default: 30)
+   * @returns {Promise<number>} Number of messages successfully deleted
+   * @throws {Error} If the old messages cannot be deleted
+   * @example
+   * // Delete messages older than 60 days
+   * const deletedCount = await chatService.deleteOldMessages("room123", 60);
+   * console.log(`Deleted ${deletedCount} old messages`);
+   * 
+   * // Delete messages older than default 30 days
+   * const count = await chatService.deleteOldMessages("room123");
    */
   async deleteOldMessages(roomId: string, daysOld: number = 30): Promise<number> {
     try {
+      // Calculate cutoff date
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysOld);
 
+      // Query for messages older than cutoff date
       const snap = await db
         .collection(this.messagesCollection)
         .doc(roomId)
@@ -118,6 +191,7 @@ export class ChatService {
         return 0;
       }
 
+      // Use batch operation for efficient deletion
       const batch = db.batch();
       snap.docs.forEach(doc => {
         batch.delete(doc.ref);
@@ -126,13 +200,21 @@ export class ChatService {
       await batch.commit();
       return snap.size;
     } catch (error) {
-      console.error("Error eliminando mensajes antiguos:", error);
-      throw new Error("No se pudieron eliminar mensajes antiguos");
+      console.error("Error deleting old messages:", error);
+      throw new Error("Unable to delete old messages");
     }
   }
 
   /**
-   * Verifica si una sala existe
+   * Checks if a chat room exists in the database
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @returns {Promise<boolean>} True if the room exists, false otherwise
+   * @example
+   * const exists = await chatService.roomExists("room123");
+   * if (exists) {
+   *   console.log("Room found!");
+   * }
    */
   async roomExists(roomId: string): Promise<boolean> {
     try {
@@ -143,13 +225,26 @@ export class ChatService {
 
       return roomDoc.exists;
     } catch (error) {
-      console.error("Error verificando sala:", error);
+      console.error("Error checking room existence:", error);
       return false;
     }
   }
 
   /**
-   * Crea o actualiza metadata de una sala
+   * Creates or updates metadata for a chat room
+   * Uses merge operation to preserve existing data while updating specific fields
+   * Automatically updates the lastActivity timestamp
+   * @async
+   * @param {string} roomId - Unique identifier of the chat room
+   * @param {any} metadata - Object containing metadata fields to update
+   * @returns {Promise<void>}
+   * @throws {Error} If the room metadata cannot be updated
+   * @example
+   * await chatService.updateRoomMetadata("room123", {
+   *   name: "Project Discussion",
+   *   participants: ["user1", "user2"],
+   *   createdBy: "user1"
+   * });
    */
   async updateRoomMetadata(roomId: string, metadata: any): Promise<void> {
     try {
@@ -161,8 +256,8 @@ export class ChatService {
           lastActivity: new Date()
         }, { merge: true });
     } catch (error) {
-      console.error("Error actualizando metadata de sala:", error);
-      throw new Error("No se pudo actualizar la sala");
+      console.error("Error updating room metadata:", error);
+      throw new Error("Unable to update room metadata");
     }
   }
 }

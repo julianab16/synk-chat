@@ -1,9 +1,33 @@
+/**
+ * Socket.IO configuration and event handlers
+ * Manages real-time bidirectional communication for the chat application
+ * @module socket
+ */
 import { Server, Socket } from "socket.io";
 import { ChatService } from "./services/chat.service";
 import { validateMessage, validateRoomId, ValidationError } from "./utils/validation";
 import { SendMessageData, SocketError } from "./types/index";
 
+/**
+ * Initializes and configures Socket.IO server
+ * Sets up all event handlers for real-time chat functionality including
+ * room management, messaging, typing indicators, and user presence tracking
+ * @function initSocket
+ * @param {any} server - HTTP server instance to attach Socket.IO
+ * @returns {Server} Configured Socket.IO server instance
+ * @example
+ * import http from 'http';
+ * const server = http.createServer(app);
+ * const io = initSocket(server);
+ */
 export const initSocket = (server: any) => {
+  /**
+   * Socket.IO server instance with CORS and connection settings
+   * @constant {Server}
+   * @property {Object} cors - CORS configuration for WebSocket connections
+   * @property {number} pingTimeout - Time to wait for ping response before disconnecting (60 seconds)
+   * @property {number} pingInterval - Interval between ping packets (25 seconds)
+   */
   const io = new Server(server, {
     cors: { 
       origin: process.env.CORS_ORIGIN || "*",
@@ -206,7 +230,12 @@ export const initSocket = (server: any) => {
     });
   });
 
-  // Evento de error del servidor
+  /**
+   * Server-level connection error handler
+   * Logs connection errors at the engine level
+   * @event connection_error
+   * @param {Error} err - Connection error
+   */
   io.engine.on("connection_error", (err: any) => {
     console.error("❌ Error de conexión del servidor:", err);
   });
