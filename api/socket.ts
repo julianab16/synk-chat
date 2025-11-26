@@ -39,116 +39,138 @@ export const initSocket = (server: any) => {
 
   const chatService = new ChatService();
 
-  // Mapa para trackear usuarios en salas
-  const userRooms = new Map<string, Set<string>>();
+  /**
+   * Map to track user information in rooms
+   * Key: roomId, Value: Map of socketId -> username
+   * @type {Map<string, Map<string, string>>}
+   */
+  const userRooms = new Map<string, Map<string, string>>();
 
   io.on("connection", (socket: Socket) => {
-    console.log(`✅ Usuario conectado: ${socket.id}`);
+    console.log(`✅ User connected: ${socket.id}`);
 
     /**
-     * Unirse a una sala
+     * Join room event handler
+     * Allows a user to join a specific chat room with their username
+     * @event joinRoom
+     * @param {Object} data - Join room data
+     * @param {string} data.roomId - Unique identifier of the room to join
+     * @param {string} data.userId - Username/identifier of the user joining
+     * @emits userJoined - Notifies other users about the new participant
+     * @emits joinedRoom - Confirms successful room join
      */
-    socket.on("joinRoom", async (roomId: string) => {
+    socket.on("joinRoom", async (data: { roomId: string; userId: string }) => {
       try {
+        const { roomId, userId } = data;
+        
         validateRoomId(roomId);
         
+        if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+          throw new ValidationError("Valid userId is required");
+        }
+
+        // Add socket to the Socket.IO room
         socket.join(roomId);
         
-        // Trackear usuario en sala
+        // Track user with their username
         if (!userRooms.has(roomId)) {
-          userRooms.set(roomId, new Set());
+          userRooms.set(roomId, new Map());
         }
-        userRooms.get(roomId)?.add(socket.id);
+        userRooms.get(roomId)?.set(socket.id, userId);
 
-        console.log(`👥 Usuario ${socket.id} entró a sala ${roomId}`);
+        console.log(`👥 User ${userId} (${socket.id}) joined room ${roomId}`);
         
-        // Notificar a otros usuarios en la sala
+        // Notify other users in the room
         socket.to(roomId).emit("userJoined", {
-          userId: socket.id,
+          userId: userId,
+          socketId: socket.id,
           roomId,
           timestamp: new Date(),
           activeUsers: userRooms.get(roomId)?.size || 0
         });
 
-        // Enviar confirmación al usuario
+        // Send confirmation to the user
         socket.emit("joinedRoom", {
           roomId,
+          userId,
           activeUsers: userRooms.get(roomId)?.size || 0,
-          message: "Te has unido a la sala exitosamente"
+          message: "Successfully joined the room"
         });
 
       } catch (error) {
-        console.error("❌ Error al unirse a sala:", error);
+        console.error("❌ Error joining room:", error);
         const errorMessage: SocketError = {
           error: error instanceof ValidationError 
             ? error.message 
-            : "No se pudo unir a la sala"
+            : "Could not join room"
         };
         socket.emit("roomError", errorMessage);
       }
     });
 
     /**
-     * Salir de una sala
+     * Leave room event handler
+     * Removes a user from a chat room
+     * @event leaveRoom
+     * @param {string} roomId - Room ID to leave
      */
     socket.on("leaveRoom", (roomId: string) => {
       try {
         validateRoomId(roomId);
         
-        socket.leave(roomId);
+        const userId = userRooms.get(roomId)?.get(socket.id);
         
-        // Remover usuario del tracking
+        socket.leave(roomId);
         userRooms.get(roomId)?.delete(socket.id);
+        
         if (userRooms.get(roomId)?.size === 0) {
           userRooms.delete(roomId);
         }
 
-        console.log(`👋 Usuario ${socket.id} salió de sala ${roomId}`);
+        console.log(`👋 User ${userId} (${socket.id}) left room ${roomId}`);
         
-        // Notificar a otros usuarios
         socket.to(roomId).emit("userLeft", {
-          userId: socket.id,
+          userId: userId || socket.id,
           roomId,
           timestamp: new Date(),
           activeUsers: userRooms.get(roomId)?.size || 0
         });
 
       } catch (error) {
-        console.error("❌ Error al salir de sala:", error);
+        console.error("❌ Error leaving room:", error);
       }
     });
 
     /**
-     * Enviar mensaje
+     * Send message event handler
+     * Processes and broadcasts a new chat message to all users in the room
+     * @event sendMessage
+     * @param {SendMessageData} data - Message data object
      */
     socket.on("sendMessage", async (data: SendMessageData) => {
       try {
-        // Validar datos
         validateMessage(data);
         
         const { roomId, sender, message } = data;
 
-        // Verificar que el usuario esté en la sala
         const rooms = Array.from(socket.rooms);
         if (!rooms.includes(roomId)) {
-          throw new ValidationError("No estás en esta sala");
+          throw new ValidationError("You are not in this room");
         }
 
-        // Guardar mensaje en Firestore
         const saved = await chatService.saveMessage(roomId, sender, message);
 
-        console.log(`💬 Mensaje enviado en sala ${roomId} por ${sender}`);
+        console.log(`💬 Message sent in room ${roomId} by ${sender}`);
 
-        // Emitir mensaje a todos en la sala
         io.to(roomId).emit("receiveMessage", saved);
 
       } catch (error) {
-        console.error("❌ Error enviando mensaje:", error);
+        console.error("❌ Error sending message:", error);
         
         const errorMessage: SocketError = {
           error: error instanceof ValidationError 
             ? error.message 
-            : "No se pudo enviar el mensaje",
+            : "Could not send message",
           details: error instanceof Error ? error.message : undefined
         };
         
@@ -157,7 +179,8 @@ export const initSocket = (server: any) => {
     });
 
     /**
-     * Usuario está escribiendo
+     * Typing indicator event handler
+     * @event typing
      */
     socket.on("typing", (data: { roomId: string; sender: string; isTyping: boolean }) => {
       try {
@@ -169,12 +192,13 @@ export const initSocket = (server: any) => {
           timestamp: new Date()
         });
       } catch (error) {
-        console.error("❌ Error en evento typing:", error);
+        console.error("❌ Error in typing event:", error);
       }
     });
 
     /**
-     * Obtener usuarios activos en una sala
+     * Get active users event handler
+     * @event getActiveUsers
      */
     socket.on("getActiveUsers", (roomId: string) => {
       try {
@@ -187,30 +211,29 @@ export const initSocket = (server: any) => {
           timestamp: new Date()
         });
       } catch (error) {
-        console.error("❌ Error obteniendo usuarios activos:", error);
+        console.error("❌ Error getting active users:", error);
       }
     });
 
     /**
-     * Desconexión
+     * Disconnect event handler
+     * Cleans up user presence when disconnecting
      */
     socket.on("disconnect", (reason: string) => {
-      console.log(`🔌 Usuario desconectado: ${socket.id} - Razón: ${reason}`);
+      console.log(`🔌 User disconnected: ${socket.id} - Reason: ${reason}`);
       
-      // Limpiar usuario de todas las salas
       userRooms.forEach((users, roomId) => {
-        if (users.has(socket.id)) {
+        const userId = users.get(socket.id);
+        if (userId) {
           users.delete(socket.id);
           
-          // Notificar a la sala
           socket.to(roomId).emit("userLeft", {
-            userId: socket.id,
+            userId: userId,
             roomId,
             timestamp: new Date(),
             activeUsers: users.size
           });
 
-          // Eliminar sala si está vacía
           if (users.size === 0) {
             userRooms.delete(roomId);
           }
@@ -219,12 +242,13 @@ export const initSocket = (server: any) => {
     });
 
     /**
-     * Manejo de errores generales
+     * General error event handler
+     * @event error
      */
     socket.on("error", (error: Error) => {
-      console.error(`❌ Error en socket ${socket.id}:`, error);
+      console.error(`❌ Error on socket ${socket.id}:`, error);
       socket.emit("socketError", {
-        error: "Error en la conexión",
+        error: "Connection error",
         details: error.message
       });
     });
@@ -232,15 +256,13 @@ export const initSocket = (server: any) => {
 
   /**
    * Server-level connection error handler
-   * Logs connection errors at the engine level
    * @event connection_error
-   * @param {Error} err - Connection error
    */
   io.engine.on("connection_error", (err: any) => {
-    console.error("❌ Error de conexión del servidor:", err);
+    console.error("❌ Server connection error:", err);
   });
 
-  console.log("🚀 Socket.IO inicializado correctamente");
+  console.log("🚀 Socket.IO initialized successfully");
 
   return io;
 };
